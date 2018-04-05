@@ -5,16 +5,17 @@ import Html exposing (Html)
 import Html.Attributes exposing (width, height, style)
 import Math.Matrix4 as Mat4 exposing (Mat4)
 import Math.Vector3 as Vec3 exposing (vec3, Vec3)
-import Keyboard exposing (downs)
+import Input exposing (..) 
 import Set exposing (Set)
 import Time exposing (Time)
+import Color
 import WebGL exposing (..)
 
 
 type alias Model =
     { time : Float
     , camera : Camera
-    , activeKeys : Set Int
+    , keys : Input.Keys
     }
 
 
@@ -22,19 +23,20 @@ type alias Camera =
     { eye : Vec3
     , orientation : Vec3
     , up : Vec3
+    , velocity : Vec3
     }
 
 
 type alias Vertex =
-    { position : Vec3
-    , color : Vec3
+    { color : Vec3
+    , position : Vec3
     }
 
 
 type Msg
     = Tick Time
-    | KeyDown Keyboard.KeyCode
-    | KeyUp Keyboard.KeyCode
+    | KeyDown Int
+    | KeyUp Int
 
 
 
@@ -49,105 +51,50 @@ update msg model =
 
         eye =
             model.camera.eye
-
-        orientation =
-            model.camera.orientation
-
-        activeKeys =
-            model.activeKeys
-
-        leftArrow =
-            65
-
-        rightArrow =
-            68
-
-        upArrow =
-            87
-
-        downArrow =
-            83
-
-        qKey =
-            81
-
-        eKey =
-            69
-
-        leftKeyOn =
-            Set.member leftArrow activeKeys
-
-        rightKeyOn =
-            Set.member rightArrow activeKeys
-
-        upKeyOn =
-            Set.member upArrow activeKeys
-
-        downKeyOn =
-            Set.member downArrow activeKeys
-
-        eKeyOn =
-            Set.member eKey activeKeys
-
-        qKeyOn =
-            Set.member qKey activeKeys
-
     in
         case msg of
             Tick t ->
                 ( { model
                     | camera =
                         camera
-                            |> (updateCameraEye
-                                    (if (leftKeyOn) then
-                                        Vec3.setX ( (Vec3.getX eye) - 0.1) eye
-                                    else if (rightKeyOn) then
-                                        Vec3.setX ( (Vec3.getX eye) + 0.1) eye
-                                    else if (upKeyOn) then
-                                        Vec3.setZ ( (Vec3.getZ eye) - 0.1) eye
-                                    else if (downKeyOn) then
-                                        Vec3.setZ ( (Vec3.getZ eye) + 0.1) eye
-                                    else
-                                        eye
-                                    )
-                               )
-                            |> (updateCameraOrientation
-                                ( if (eKeyOn) then
-                                      Vec3.setX ( (Vec3.getX orientation) - 0.1) orientation
-                                  else if (qKeyOn) then
-                                      Vec3.setX ( (Vec3.getX orientation) + 0.1) orientation
-                                  else 
-                                    orientation
-                                )
-                            )
+                            |> moveCamera model.keys 
+                            |> physics (t / 2000000000000)
                   }
                 , Cmd.none
                 )
+                
+            KeyDown code ->
+                ( { model | keys = Input.keyFunc True code model.keys}, Cmd.none )
 
-            KeyDown 65 ->
-                ( { model | activeKeys = Set.insert leftArrow activeKeys }, Cmd.none )
+            KeyUp code ->
+                ( { model | keys = Input.keyFunc False code model.keys }, Cmd.none )
 
-            KeyDown 68 ->
-                ( { model | activeKeys = Set.insert rightArrow activeKeys }, Cmd.none )
 
-            KeyDown 87 ->
-                ( { model | activeKeys = Set.insert upArrow activeKeys }, Cmd.none )
+moveCamera : Input.Keys -> Camera -> Camera
+moveCamera { left, right, up, down, space } cam = 
+    let
+        direction a b =
+            if a == b then
+                0
+            else if a then
+                0.1
+            else
+                -0.1
+    in
+    { cam 
+        | velocity = vec3 (direction left right) (Vec3.getY cam.eye) (direction up down)
+    } 
 
-            KeyDown 83 ->
-                ( { model | activeKeys = Set.insert downArrow activeKeys }, Cmd.none )
 
-            KeyDown 69 ->
-                ( { model | activeKeys = Set.insert eKey activeKeys }, Cmd.none )
-
-            KeyDown 81 ->
-                ( { model | activeKeys = Set.insert qKey activeKeys }, Cmd.none )
-
-            KeyDown _ ->
-                ( model, Cmd.none )
-
-            KeyUp key ->
-                ( { model | activeKeys = Set.remove key activeKeys }, Cmd.none )
-
+physics : Float -> Camera -> Camera
+physics t cam =
+    let
+        eye =
+            Vec3.add cam.eye (Vec3.scale t cam.velocity)
+    in
+        { cam
+            | eye = eye
+        }
 
 
 updateCameraEye : Vec3 -> Camera -> Camera
@@ -175,40 +122,87 @@ view model =
         WebGL.toHtml
             [ width 400
             , height 400
-            , style [ ( "display", "block" ) ]
+            , style [ ( "display", "block" ), ("border", "1px solid purple") ]
             ]
-            [ WebGL.entity
-                vertexShader
-                fragmentShader
-                mesh
-                { perspective = perspective cam }
-            ]
+            [ scene model ]
         , Html.p [] [ Html.text (toString cam.eye) ]
         ]
+
+scene : Model -> Entity
+scene model = WebGL.entity
+                vertexShader
+                fragmentShader
+                cubeMesh
+                { perspective = perspective model.camera
+                , shade = 0.8 }
 
 
 perspective : Camera -> Mat4
 perspective cam =
     Mat4.mul
         (Mat4.makePerspective 45 1 0.01 100)
-        (Mat4.makeLookAt cam.eye (vec3 (Vec3.getX cam.eye) 0 0) cam.up)
+        (Mat4.makeLookAt cam.eye (Vec3.add cam.eye Vec3.k) cam.up)
 
 
--- Mesh
--- The actual triangle
+-- Meshes
 
+cubeMesh : Mesh Vertex
+cubeMesh =
+    let
+        rft =
+            vec3 1 1 1
 
-mesh : Mesh Vertex
-mesh =
-    WebGL.triangles
-        [ ( Vertex (vec3 0 0 0) (vec3 1 0 0)
-          , Vertex (vec3 1 1 0) (vec3 0 1 0)
-          , Vertex (vec3 1 -1 0) (vec3 0 0 1)
-          )
+        lft =
+            vec3 -1 1 1
+
+        lbt =
+            vec3 -1 -1 1
+
+        rbt =
+            vec3 1 -1 1
+
+        rbb =
+            vec3 1 -1 -1
+
+        rfb =
+            vec3 1 1 -1
+
+        lfb =
+            vec3 -1 1 -1
+
+        lbb =
+            vec3 -1 -1 -1
+    in
+        [ face Color.green rft rfb rbb rbt
+        , face Color.blue rft rfb lfb lft
+        , face Color.yellow rft lft lbt rbt
+        , face Color.red rfb lfb lbb rbb
+        , face Color.purple lft lfb lbb lbt
+        , face Color.orange rbt rbb lbb lbt
         ]
+        |> List.concat
+        |> WebGL.triangles
 
 
+face : Color.Color -> Vec3 -> Vec3 -> Vec3 -> Vec3 -> List ( Vertex, Vertex, Vertex )
+face rawColor a b c d =
+    let
+        color =
+            let
+                c =
+                    Color.toRgb rawColor
+            in
+                vec3
+                    (toFloat c.red / 255)
+                    (toFloat c.green / 255)
+                    (toFloat c.blue / 255)
 
+        vertex position =
+            Vertex color position
+    in
+        [ ( vertex a, vertex b, vertex c )
+        , ( vertex c, vertex d, vertex a )
+        ]
 -- MAIN SUB INIT
 
 
@@ -216,16 +210,16 @@ subscriptions : Model -> Sub Msg
 subscriptions model =
       Sub.batch
         [ AnimationFrame.times Tick
-        , Keyboard.downs KeyDown
-        , Keyboard.ups KeyUp
+        , Input.keyDownSub KeyDown
+        , Input.keyUpSub KeyUp
         ] 
 
 init : ( Model, Cmd Msg )
 init =
     ( Model
         0
-        (Camera (vec3 0 0 4) (vec3 0 0 0) (vec3 0 1 0))
-        Set.empty
+        (Camera (vec3 0 0 -2) (vec3 0 0 0) (vec3 0 1 0) (vec3 0.1 0 0))
+        Input.init
     , Cmd.none
     )
 
@@ -244,9 +238,11 @@ main =
 -- Shaders
 
 
-type alias Uniforms =
-    { perspective : Mat4 }
 
+type alias Uniforms =
+    { perspective : Mat4
+    , shade : Float
+    }
 
 vertexShader : Shader Vertex Uniforms { vcolor : Vec3 }
 vertexShader =
@@ -266,8 +262,9 @@ fragmentShader : Shader {} Uniforms { vcolor : Vec3 }
 fragmentShader =
     [glsl|
         precision mediump float;
+        uniform float shade;
         varying vec3 vcolor;
         void main () {
-            gl_FragColor = vec4(vcolor, 1.0);
+            gl_FragColor = shade * vec4(vcolor, 1.0);
         }
     |]
